@@ -1,6 +1,12 @@
 # XELoader
 
-This utility can be used to fast load contents of a set of Extended Events file to a SQL Server Database
+This utility can be used to fast load contents of a set of Extended Events file to a SQL Server Database.
+The fundamental idea here is to feed the utility with a set of XEL files from the same Extended Event session. 
+The utility uses the QueryableXEventData class of XEvent linq object model and read the events in parallel on multiple threads.
+We can then submit these extracted event information into tables in a SQL Server database.
+
+If you have a need to constantly collect and load Extended Event target files into a database then utility is for you. 
+There are a lot of customization possibilities that exist here. Feel free to customize and share it with the rest of the community!
 
 *** Parameter Details ***
 *** Parameters are case sensitive, no spaces allowed after parameter name and its value ***
