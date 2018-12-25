@@ -539,6 +539,11 @@ namespace XELoader
             Console.WriteLine("-d : specify the database name to use for saving the processed XE data [default : XE_Import]");
             Console.WriteLine("      if the database name exists, it will be used instead of creating a new one");
             Console.WriteLine("      you can pre-create the database on a specific location, multiple files and other filegroup options for better performance");
+            Console.WriteLine("-U : specify the SQL login name to use for connecting to the SQL Server");
+            Console.WriteLine("      If you do not specify this parameter, Trusted security or Intergrated authentication is used");
+            Console.WriteLine("      If you specify this parameter, supply the password for this login using the -P parameter");
+            Console.WriteLine("-P : specify the password for the SQL login name");
+            Console.WriteLine("      Use this option if you used the -U parameter");
             Console.WriteLine("-w : use this parameter to indicate if the existing database needs to be (wiped) - dropped and recreated from scratch");
             Console.WriteLine("      you do not specify any value for parameter");
             Console.WriteLine("-c : use this parameter to indicate if all existing tables for this collection of events needs to be cleared and data reloaded");

@@ -29,6 +29,11 @@ There are a lot of customization possibilities that exist here. Feel free to cus
 -d : specify the database name to use for saving the processed XE data [default : XE_Import]
       if the database name exists, it will be used instead of creating a new one
       you can pre-create the database on a specific location, multiple files and other filegroup options for better performance
+-U : specify the SQL login name to use for connecting to the SQL Server
+      If you do not specify this parameter, Trusted security or Intergrated authentication is used
+      If you specify this parameter, supply the password for this login using the -P parameter
+-P : specify the password for the SQL login name
+      Use this option if you used the -U parameter
 -w : use this parameter to indicate if the existing database needs to be (wiped) - dropped and recreated from scratch
       you do not specify any value for parameter
 -c : use this parameter to indicate if all existing tables for this collection of events needs to be cleared and data reloaded
