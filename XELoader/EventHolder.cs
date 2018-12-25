@@ -361,7 +361,11 @@ namespace XELoader
                 Console.WriteLine("Thread {0} : Perform bulk copy to Database : {1} : Flushing rows : {2} : for DataTable : {3} ", Thread.CurrentThread.ManagedThreadId, ReasonForFlush, in_dt_To_SaveToDatabase.Rows.Count, in_dt_To_SaveToDatabase.TableName);
 
                 // Establish a connection to the SQL Server where the parsed data will be stored
-                SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString);
+                SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
+                if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
+                {
+                    DestinationConnection.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;
+                }
                 DestinationConnection.Open();
                 // Setup the bulk copy context and associations
                 SqlBulkCopy DestinationBulkCopy = new SqlBulkCopy(DestinationConnection);
@@ -433,7 +437,11 @@ namespace XELoader
         public Int64 InsertFileInfoIntoTrackingTable()
         {
             // Establish a connection to the SQL Server where the parsed data will be stored
-            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString);
+            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
+            if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
+            {
+                DestinationConnection.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;
+            }
             DestinationConnection.Open();
             // form the insert statement
             Int64 file_id = 0;
@@ -461,7 +469,11 @@ namespace XELoader
         public void UpdateFileInfoInTrackingTable()
         {
             // Establish a connection to the SQL Server where the information will be stored
-            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString);
+            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
+            if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
+            {
+                DestinationConnection.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;
+            }
             DestinationConnection.Open();
             // form the update statement
             String tsql_Insert_tbl_ImportedXEventFiles = "update [dbo].[tbl_ImportedXEventFiles] set [total_processing_time] = @total_processing_time, [bulk_copy_time] = @bulk_copy_time where [file_id] = @file_id;";

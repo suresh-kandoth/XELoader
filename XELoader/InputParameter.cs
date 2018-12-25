@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using Microsoft.SqlServer.XEvent;
 using Microsoft.SqlServer.XEvent.Linq;
 using System.Xml;
+using System.Security;
 
 namespace XELoader
 {
@@ -26,6 +27,11 @@ namespace XELoader
 
         public String m_Destination_SQL_Server = ".";                   // populated by -S  [upper case]
         public String m_Destination_SQL_Database = "XE_Import";         // populated by -d
+        public String m_Destination_SQL_Login = "";                     // populated by -U  [upper case]
+        public String m_Destination_SQL_Password = "";                  // populated by -P  [upper case]
+        public String m_Destination_Security_Mode = "Integrated";
+        public SqlCredential m_Destination_Sql_Credential;
+
         public int m_bulkcopy_BatchSize = 1048576;                      // populated by -b  [setting it for the optimal size needed for columnstore]
         public String m_IndexType = "";                                 // populated by -I  [allowed values are RowStore and ColumnStore]
         public String m_SchemaName = "xel";                             // populated by -s  [lower case]
@@ -47,7 +53,8 @@ namespace XELoader
         public int m_CallStack_FrameLength = 8;                         // populated by -h
         public String m_CallStack_command = "ln";                       // populated by -j
 
-        public String m_ConnectionString = "";                          // constructed using server name and database name
+        public String m_ConnectionString_targetDB = "";                 // constructed using server name and target database name to which events are loaded
+        public String m_ConnectionString_masterDB = "";                 // constructed using server name and master database name
 
         // this method parses all input parameters and stores the value in the member variables
         public bool ProcessInputParameters(String[] _input_params)
@@ -186,6 +193,26 @@ namespace XELoader
                             m_CallStack_command = _input_param.Substring(2);
                             break;
                         }
+                    case "U":   // SQL Server login name
+                        {
+                            m_Destination_SQL_Login = _input_param.Substring(2);
+                            m_Destination_Security_Mode = "Standard";
+                            break;
+                        }
+                    case "P":   // SQL Server password
+                        {
+                            m_Destination_SQL_Password = _input_param.Substring(2);
+                            SecureString securePwd = new SecureString();
+                            char[] charArr = m_Destination_SQL_Password.ToCharArray();
+                            for (int i=0; i<m_Destination_SQL_Password.Length; i++)
+                            {
+                                securePwd.AppendChar(charArr[i]);
+                            }
+                            securePwd.MakeReadOnly();
+                            m_Destination_Sql_Credential = new SqlCredential(m_Destination_SQL_Login, securePwd);
+                            m_Destination_SQL_Password = "";
+                            break;
+                        }
                     default:
                         {
                             break;
@@ -209,7 +236,16 @@ namespace XELoader
             if (1 <= m_Count_Parameters) // now we have a good set of parameters to process
             {
                 // prepare connection string for easy use later
-                m_ConnectionString = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Integrated Security=SSPI;Timeout=60;";
+                if ("Integrated" == m_Destination_Security_Mode)
+                {
+                    m_ConnectionString_targetDB = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Trusted_Connection=yes;Timeout=60;";
+                    m_ConnectionString_masterDB = @"Server=" + m_Destination_SQL_Server + @"; database=master; Trusted_Connection=yes;Timeout=60;";
+                }
+                if ("Standard" == m_Destination_Security_Mode)
+                {
+                    m_ConnectionString_targetDB = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Timeout=60;";
+                    m_ConnectionString_masterDB = @"Server=" + m_Destination_SQL_Server + @"; database=master; Timeout=60;";
+                }
 
                 if (0 == m_NumThreads)
                 {
@@ -252,8 +288,11 @@ namespace XELoader
         public void DetectServerCapabilities()
         {
             // Establish a connection to the SQL Server that we need to query
-            String _ConnectionString = @"Server=" + m_Destination_SQL_Server + @"; database=master; Integrated Security=SSPI;Timeout=60;";
-            SqlConnection DestinationConnection = new SqlConnection(_ConnectionString);
+            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString_masterDB);
+            if ("Standard" == m_Destination_Security_Mode)
+            {
+                DestinationConnection.Credential = m_Destination_Sql_Credential;
+            }
             DestinationConnection.Open();
 
             // check the server version
@@ -301,8 +340,11 @@ namespace XELoader
         public void CreateDatabase()
         {
             // Establish a connection to the SQL Server where the database needs to be created
-            String _ConnectionString = @"Server=" + m_Destination_SQL_Server + @"; database=master; Integrated Security=SSPI;Timeout=60;";
-            SqlConnection DestinationConnection = new SqlConnection(_ConnectionString);
+            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString_masterDB);
+            if ("Standard" == m_Destination_Security_Mode)
+            {
+                DestinationConnection.Credential = m_Destination_Sql_Credential;
+            }
             DestinationConnection.Open();
 
             // check if the database requested exists in this server
@@ -384,7 +426,11 @@ namespace XELoader
 
         public void CreateSchema()
         {
-            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString);
+            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString_targetDB);
+            if ("Standard" == m_Destination_Security_Mode)
+            {
+                DestinationConnection.Credential = m_Destination_Sql_Credential;
+            }
             DestinationConnection.Open();
 
             // Create the schema supplied as input parameter
@@ -425,7 +471,11 @@ namespace XELoader
         public void CreateTrackingTable()
         {
             // Establish a connection to the SQL Server where the table needs to be created
-            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString);
+            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString_targetDB);
+            if ("Standard" == m_Destination_Security_Mode)
+            {
+                DestinationConnection.Credential = m_Destination_Sql_Credential;
+            }
             DestinationConnection.Open();
 
             // check if this table already exists

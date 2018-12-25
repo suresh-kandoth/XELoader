@@ -134,7 +134,7 @@ namespace XELoader
         public void CreateTableInSQLdatabase(DataTable in_dt_event)
         {
             // Establish a connection to the SQL Server where the table needs to be created
-            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString);
+            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
             DestinationConnection.Open();
 
             // check if this table already exists
