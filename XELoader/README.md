@@ -89,4 +89,6 @@ Assembly dependencies:
 Microsoft.SqlServer.XEvent.Linq.dll [version 14.x.x.x]
 Microsoft.SqlServer.XE.Core.dll [version 14.x.x.x]
 
+Framework:
 
+.NET framework 4.6
