@@ -1,0 +1,3 @@
+C:\Source\Git\XELoader\XELoader\bin\x64\Release>XELoader.exe -S.\SQL2017 -w -D"C:\Samples\Xel_files" -p"system_health*.xel"
+
+C:\Source\Git\XELoader\XELoader\bin\x64\Release>XELoader.exe -S.\SQL2017 -UMySQLLogin -PMySqlPassword -w -D"C:\Samples\Xel_files" -p"system_health*.xel"

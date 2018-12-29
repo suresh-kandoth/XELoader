@@ -106,7 +106,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
-    <None Include="README.md" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="SQL_Scripts\" />

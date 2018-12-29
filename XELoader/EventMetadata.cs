@@ -135,6 +135,10 @@ namespace XELoader
         {
             // Establish a connection to the SQL Server where the table needs to be created
             SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
+            if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
+            {
+                DestinationConnection.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;
+            }
             DestinationConnection.Open();
 
             // check if this table already exists
