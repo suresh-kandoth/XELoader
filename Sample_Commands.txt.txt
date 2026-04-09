@@ -1,3 +1,5 @@
 C:\Source\Git\XELoader\XELoader\bin\x64\Release>XELoader.exe -S.\SQL2017 -w -D"C:\Samples\Xel_files" -p"system_health*.xel"
 
 C:\Source\Git\XELoader\XELoader\bin\x64\Release>XELoader.exe -S.\SQL2017 -UMySQLLogin -PMySqlPassword -w -D"C:\Samples\Xel_files" -p"system_health*.xel"
+
+Note: Make sure there is no space between Switches and their values. For example, it should be -SSQLSERVER01 instead of -S SQLServer01. This applies to all switches.
