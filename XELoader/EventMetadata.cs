@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Data;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
@@ -134,7 +134,7 @@ namespace XELoader
         public void CreateTableInSQLdatabase(DataTable in_dt_event)
         {
             // Establish a connection to the SQL Server where the table needs to be created
-            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
+            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString);
             if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
             {
                 DestinationConnection.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;
@@ -248,6 +248,8 @@ namespace XELoader
                 Console.WriteLine("Thread {0} : Events will append to existing table : {1}  [Overide with -c for clearing out existing content]", Thread.CurrentThread.ManagedThreadId, in_dt_event.TableName);
             }
 
+            EnsureTableSchemaMatches(in_dt_event);
+
             // Close the connection
             DestinationConnection.Close();
         }
@@ -300,7 +302,7 @@ namespace XELoader
                 case "System.Boolean":
                     return "bit";
                 case "System.DateTime":
-                    switch (in_ColumnName)
+                    switch(in_ColumnName)
                     {
                         case "e_Time_Of_Event":
                             return "smalldatetime";
@@ -354,37 +356,37 @@ namespace XELoader
         {
             String _tlength = XELoader.FileProcessor.myInputParameters.m_StringToStringTruncation.ToString();
             // Columnstore does not support max data types in SQL 2014 and 2016
-            if (("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI))
+            if ( ("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI) )       
                 return String.Concat("nvarchar(", _tlength, ")");
             // for rowstore we will store as max data type
             else
-                return "nvarchar(max)";
+                return "nvarchar(max)";             
         }
 
         public String GetMaxPossibleXMLColumn()
         {
             String _tlength = XELoader.FileProcessor.myInputParameters.m_XMLToStringTruncation.ToString();
             // Columnstore does not support max data types in SQL 2014 and 2016
-            if (("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI))
+            if ( ("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI) )       
                 return String.Concat("nvarchar(", _tlength, ")");
             // store big xml documents as nvarchar - otherwise you will encounter more than 128 nested depth error
-            else if ((("RowStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (true == XELoader.FileProcessor.myInputParameters.m_storeXMLasString))
-                || (("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (true == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI)))
+            else if ( ( ("RowStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (true == XELoader.FileProcessor.myInputParameters.m_storeXMLasString) ) 
+                || ( ("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (true == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI) ) )
                 return "nvarchar(max)";
             // for rowstore we will store as native XML
             else
-                return "xml";
+                return "xml";                   
         }
 
         public String GetMaxPossibleBinaryColumn()
         {
             String _tlength = XELoader.FileProcessor.myInputParameters.m_BinaryToBinaryTruncation.ToString();
             // Columnstore does not support max data types in SQL 2014 and 2016
-            if (("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI))
+            if ( ("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI) )       
                 return String.Concat("varbinary(", _tlength, ")");
             // for rowstore we will store as max data type
             else
-                return "varbinary(max)";
+                return "varbinary(max)";             
         }
 
         public void GetMaxPossibleColumn()
@@ -392,6 +394,64 @@ namespace XELoader
             m_MaxPossibleStringColumn = GetMaxPossibleStringColumn();
             m_MaxPossibleXMLColumn = GetMaxPossibleXMLColumn();
             m_MaxPossibleBinaryColumn = GetMaxPossibleBinaryColumn();
+        }
+
+
+        public void EnsureTableSchemaMatches(DataTable in_dt_event)
+        {
+            string tableName = in_dt_event.TableName;
+            string schemaName = XELoader.FileProcessor.myInputParameters.m_SchemaName;
+            string connStr = XELoader.FileProcessor.myInputParameters.m_ConnectionString;
+
+            using (var conn = new SqlConnection(connStr))
+            {
+                if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
+                {
+                    conn.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;
+                }
+                conn.Open();
+
+                // 1. Get existing columns from SQL table
+                var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                using (var cmd = new SqlCommand(
+                    @"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+                      WHERE TABLE_SCHEMA = @schema AND TABLE_NAME = @table", conn))
+                {
+                    cmd.Parameters.AddWithValue("@schema", schemaName);
+                    cmd.Parameters.AddWithValue("@table", tableName);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                            existingColumns.Add(reader.GetString(0));
+                    }
+                }
+
+                // 2. Add missing columns to SQL table
+                foreach (DataColumn col in in_dt_event.Columns)
+                {
+                    if (!existingColumns.Contains(col.ColumnName))
+                    {
+                        string sqlType = GetSQLType(col.DataType.FullName, col.ColumnName);
+                        string alterSql = $"ALTER TABLE [{schemaName}].[{tableName}] ADD [{col.ColumnName}] {sqlType} NULL";
+                        using (var alterCmd = new SqlCommand(alterSql, conn))
+                        {
+                            alterCmd.ExecuteNonQuery();
+                        }
+                    }
+                }
+
+                // 3. Add missing columns to DataTable (if any in SQL but not in DataTable)
+                // Optional: Uncomment if you want to add missing SQL columns to DataTable
+                
+                foreach (var sqlCol in existingColumns)
+                {
+                    if (!in_dt_event.Columns.Contains(sqlCol))
+                    {
+                        in_dt_event.Columns.Add(sqlCol, typeof(string)); // Default to string, or query type if needed
+                    }
+                }
+                
+            }
         }
     }
 

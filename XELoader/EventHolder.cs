@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Data;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
@@ -25,7 +25,7 @@ namespace XELoader
         public int m_Number_of_String_Truncations;
         public int m_Number_of_XML_Truncations;
         public int m_Number_of_Binary_Truncations;
-
+        
         public EventHolder(String in_FileName)
         {
             m_event_File_Info = new FileInfo(in_FileName);
@@ -82,8 +82,11 @@ namespace XELoader
                 Console.WriteLine("Thread {0} : Event Timestamp   : {1}  ", Thread.CurrentThread.ManagedThreadId, in_x_event.Timestamp);
 
                 Console.WriteLine("Thread {0} : Exception message : {1}  ", Thread.CurrentThread.ManagedThreadId, e.Message);
-                Console.WriteLine("Thread {0} : Exception code    : {1}  ", Thread.CurrentThread.ManagedThreadId, System.Runtime.InteropServices.Marshal.GetHRForException(e));   //Using e.HREsult gives CS0122 in new versions of .NET
-                Console.WriteLine("Thread {0} : Exception stack   : {1}  ", Thread.CurrentThread.ManagedThreadId, e.StackTrace);
+                Console.WriteLine("Thread {0} : Exception code    : {1}  ", Thread.CurrentThread.ManagedThreadId, e.HResult);
+                if (XELoader.FileProcessor.myInputParameters.m_Verbose)
+                    Console.WriteLine("Thread {0} : Exception stack   : {1}  ", Thread.CurrentThread.ManagedThreadId, e.StackTrace);
+                else
+                    Console.WriteLine("Thread {0} : Use -V parameter for detailed stack trace", Thread.CurrentThread.ManagedThreadId);
 
                 Console.ResetColor();
 
@@ -270,12 +273,12 @@ namespace XELoader
         public String ExtractStringFromStringAfterTruncation(String in_String)
         {
             // Columnstore does not support max data types in SQL 2014 and 2016, so we need to perform truncation of large strings
-            if (("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI))
+            if ( ("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI) )
             {
                 // storing incoming string length since we reuse it multiple times
                 int _length = in_String.Length;
                 // is the string longer than what is specified in the program input requirements
-                if (XELoader.FileProcessor.myInputParameters.m_StringToStringTruncation < _length)
+                if (XELoader.FileProcessor.myInputParameters.m_StringToStringTruncation < _length)        
                 {
                     _length = XELoader.FileProcessor.myInputParameters.m_StringToStringTruncation;
                     m_Number_of_String_Truncations++;
@@ -285,19 +288,19 @@ namespace XELoader
             else
             {
                 // retain original string if this is rowstore since we do not want to truncate at expense of speed and compression
-                return in_String;
+                return in_String;                                                             
             }
         }
 
         public String ExtractStringFromXMLAfterTruncation(String in_String)
         {
             // Columnstore does not support max data types in SQL 2014 and 2016, so we need to perform truncation of large strings
-            if (("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI))
+            if ( ("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI) )                    
             {
                 // storing incoming string length since we reuse it multiple times
-                int _length = in_String.Length;
+                int _length = in_String.Length; 
                 // is the string longer than what is specified in the program input requirements
-                if (XELoader.FileProcessor.myInputParameters.m_XMLToStringTruncation < _length)
+                if (XELoader.FileProcessor.myInputParameters.m_XMLToStringTruncation < _length)   
                 {
                     _length = XELoader.FileProcessor.myInputParameters.m_XMLToStringTruncation;
                     m_Number_of_XML_Truncations++;
@@ -307,31 +310,31 @@ namespace XELoader
             else
             {
                 // retain original string if this is rowstore since we do not want to truncate at expense of speed and compression
-                return in_String;
+                return in_String;                                                             
             }
         }
 
         public byte[] ExtractBinaryFromBinaryAfterTruncation(byte[] in_Binary)
         {
             // Columnstore does not support max data types in SQL 2014 and 2016, so we need to perform truncation of large strings
-            if (("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI))
+            if ( ("ColumnStore" == XELoader.FileProcessor.myInputParameters.m_IndexType) && (false == XELoader.FileProcessor.myInputParameters.m_LOBallowedonCSI) )
             {
                 // storing incoming string length since we reuse it multiple times
                 int _length = in_Binary.Length;
                 // is the string longer than what is specified in the program input requirements
-                if (XELoader.FileProcessor.myInputParameters.m_BinaryToBinaryTruncation < _length)
+                if (XELoader.FileProcessor.myInputParameters.m_BinaryToBinaryTruncation < _length)        
                 {
                     _length = XELoader.FileProcessor.myInputParameters.m_StringToStringTruncation;
                     m_Number_of_Binary_Truncations++;
                 }
                 byte[] out_Binary = new byte[_length];
-                Array.Copy(in_Binary, out_Binary, _length);
+                Array.Copy(in_Binary,out_Binary, _length);
                 return out_Binary;
             }
             else
             {
                 // retain original string if this is rowstore since we do not want to truncate at expense of speed and compression
-                return in_Binary;
+                return in_Binary;                                                             
             }
         }
 
@@ -361,7 +364,7 @@ namespace XELoader
                 Console.WriteLine("Thread {0} : Perform bulk copy to Database : {1} : Flushing rows : {2} : for DataTable : {3} ", Thread.CurrentThread.ManagedThreadId, ReasonForFlush, in_dt_To_SaveToDatabase.Rows.Count, in_dt_To_SaveToDatabase.TableName);
 
                 // Establish a connection to the SQL Server where the parsed data will be stored
-                SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
+                SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString);
                 if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
                 {
                     DestinationConnection.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;
@@ -387,7 +390,10 @@ namespace XELoader
                     Console.WriteLine("Thread {1} : Exception encountered while performing column mapping for table {0}", in_dt_To_SaveToDatabase.TableName, Thread.CurrentThread.ManagedThreadId);
                     Console.WriteLine("Thread {0} : Please ensure the table exists in the database with the expected schema", Thread.CurrentThread.ManagedThreadId);
                     Console.WriteLine("Thread {0} : Exception # {1}, message : {2}", Thread.CurrentThread.ManagedThreadId, ex.Number, ex.Message);
-                    Console.WriteLine("{0}", ex.StackTrace);
+                    if (XELoader.FileProcessor.myInputParameters.m_Verbose)
+                        Console.WriteLine("{0}", ex.StackTrace);
+                    else
+                        Console.WriteLine("Thread {0} : Use -V parameter for detailed stack trace", Thread.CurrentThread.ManagedThreadId);
                     Console.ResetColor();
                 }
                 DateTime BulkCopyStartTime = DateTime.Now;
@@ -402,7 +408,10 @@ namespace XELoader
                     Console.WriteLine("Thread {1} : Exception encountered while performing bulk copy for table {0}", in_dt_To_SaveToDatabase.TableName, Thread.CurrentThread.ManagedThreadId);
                     Console.WriteLine("Thread {0} : Please ensure the table exists in the database with the expected schema", Thread.CurrentThread.ManagedThreadId);
                     Console.WriteLine("Thread {0} : Exception # {1}, message : {2}", Thread.CurrentThread.ManagedThreadId, ex.Number, ex.Message);
-                    Console.WriteLine("{0}", ex.StackTrace);
+                    if (XELoader.FileProcessor.myInputParameters.m_Verbose)
+                        Console.WriteLine("{0}", ex.StackTrace);
+                    else
+                        Console.WriteLine("Thread {0} : Use -V parameter for detailed stack trace", Thread.CurrentThread.ManagedThreadId);
                     Console.ResetColor();
                 }
                 DateTime BulkCopyEndTime = DateTime.Now;
@@ -426,7 +435,7 @@ namespace XELoader
         public void SaveAllDataTablesToSQLDatabase()
         {
             foreach (DataTable dt_To_SaveToDatabase in m_event_tables)
-                SaveDataTableToSQLDatabase(dt_To_SaveToDatabase, "Residual Flush");
+                SaveDataTableToSQLDatabase(dt_To_SaveToDatabase,"Residual Flush");
         }
 
         public void ClearAllDataTables()
@@ -437,7 +446,7 @@ namespace XELoader
         public Int64 InsertFileInfoIntoTrackingTable()
         {
             // Establish a connection to the SQL Server where the parsed data will be stored
-            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
+            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString);
             if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
             {
                 DestinationConnection.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;
@@ -469,7 +478,7 @@ namespace XELoader
         public void UpdateFileInfoInTrackingTable()
         {
             // Establish a connection to the SQL Server where the information will be stored
-            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString_targetDB);
+            SqlConnection DestinationConnection = new SqlConnection(XELoader.FileProcessor.myInputParameters.m_ConnectionString);
             if ("Standard" == XELoader.FileProcessor.myInputParameters.m_Destination_Security_Mode)
             {
                 DestinationConnection.Credential = XELoader.FileProcessor.myInputParameters.m_Destination_Sql_Credential;

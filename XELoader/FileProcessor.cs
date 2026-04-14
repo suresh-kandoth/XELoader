@@ -1,11 +1,10 @@
 ﻿using System;
-using System.Reflection;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Data;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
@@ -26,17 +25,12 @@ namespace XELoader
             try
             {
                 PrintProgramDetails();
-                // lets first check if we have the required assemblies installed on this system
-                bool a_result = CheckAssembly();
-                if (false == a_result)
-                    return 0;
-
                 myTrackStatus = new TrackStatus();
                 myInputParameters = new InputParameters();
                 bool status_of_params = myInputParameters.ProcessInputParameters(args);
+                myInputParameters.DetectServerCapabilities();
                 if (true == status_of_params)
                 {
-                    myInputParameters.DetectServerCapabilities();
                     // we do not need to create the database and schema if we are in append mode
                     if (false == myInputParameters.m_AppendToExistingData)
                     {
@@ -73,8 +67,11 @@ namespace XELoader
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine("Thread {0} : ***  Exception encountered  *** ", Thread.CurrentThread.ManagedThreadId);
                 Console.WriteLine("Thread {0} : Exception message : {1}  ", Thread.CurrentThread.ManagedThreadId, e.Message);
-                Console.WriteLine("Thread {0} : Exception code : {1}  ", Thread.CurrentThread.ManagedThreadId, System.Runtime.InteropServices.Marshal.GetHRForException(e));  //Using e.HResult gives CS0122 in new versions of .NET
-                Console.WriteLine("Thread {0} : Exception stack : {1}  ", Thread.CurrentThread.ManagedThreadId, e.StackTrace);
+                Console.WriteLine("Thread {0} : Exception code : {1}  ", Thread.CurrentThread.ManagedThreadId, e.HResult);
+                if (myInputParameters != null && myInputParameters.m_Verbose)
+                    Console.WriteLine("Thread {0} : Exception stack : {1}  ", Thread.CurrentThread.ManagedThreadId, e.StackTrace);
+                else
+                    Console.WriteLine("Thread {0} : Use -V parameter for detailed stack trace", Thread.CurrentThread.ManagedThreadId);
                 Console.ResetColor();
 
                 return 1;
@@ -112,11 +109,12 @@ namespace XELoader
                         myTrackStatus.m_filePatternInUse = myInputParameters.m_XEL_File_Pattern;
                     }
 
-                    if (myInputParameters.m_NumThreads > 1)
+                    // We should only use Parallel processing if we have more than one file to process
+                    if (myInputParameters.m_NumThreads > 1 && xel_Files_To_Process.Length > 1)
                     {
                         //process directory using parallel threads
                         ParallelOptions pOptions = new ParallelOptions();
-                        pOptions.MaxDegreeOfParallelism = Math.Min(myInputParameters.m_NumThreads, xel_Files_To_Process.Length);
+                        pOptions.MaxDegreeOfParallelism = Math.Min(myInputParameters.m_NumThreads,xel_Files_To_Process.Length);
                         Console.WriteLine("Thread {0} : Using {1} thread(s) to process the event files [Override with -t parameter]", Thread.CurrentThread.ManagedThreadId, pOptions.MaxDegreeOfParallelism);
                         Parallel.ForEach(xel_Files_To_Process, pOptions, xel_File_To_Process => ProcessOneFile(xel_File_To_Process));
                     }
@@ -145,29 +143,32 @@ namespace XELoader
         static void ProcessOneFile(String in_file_to_process)
         {
             FileInfo current_File = new FileInfo(in_file_to_process);
-            String current_File_Pattern = GetLeadingFilePattern(current_File.Name);
 
             // did the user request a specific pattern
             if ("*.xel" != myInputParameters.m_XEL_File_Pattern)
             {
-                String pattern = "*.xel";
-                int position = myInputParameters.m_XEL_File_Pattern.LastIndexOf(pattern);
-                String requested_leading_pattern = myInputParameters.m_XEL_File_Pattern.Substring(0, position);
+                // Convert wildcard pattern to regex
+                string wildcardPattern = myInputParameters.m_XEL_File_Pattern;
+                // Escape regex special chars except for * and ?
+                string regexPattern = "^" + Regex.Escape(wildcardPattern)
+                    .Replace(@"\*", ".*")
+                    .Replace(@"\?", ".") + "$";
 
-                String current_leading_pattern = current_File_Pattern.Substring(0, requested_leading_pattern.Length);
-                if (current_leading_pattern != requested_leading_pattern)
+                // Match against the file name
+                if (!Regex.IsMatch(current_File.Name, regexPattern, RegexOptions.IgnoreCase))
                 {
                     Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine("Thread {0} : Skipping file since pattern [{1}] did not match : {2} [Overide with -p for alternate pattern]", Thread.CurrentThread.ManagedThreadId, requested_leading_pattern, current_File.Name);
+                    Console.WriteLine("Thread {0} : Skipping file since pattern [{1}] did not match : {2} [Override with -p for alternate pattern]",
+                        Thread.CurrentThread.ManagedThreadId, myInputParameters.m_XEL_File_Pattern, current_File.Name);
                     Console.ResetColor();
                     return;
                 }
             }
             // check if this file belongs to the same XE session or something else
-            else if (current_File_Pattern != myTrackStatus.m_filePatternInUse)
+            else if (GetLeadingFilePattern(current_File.Name) != myTrackStatus.m_filePatternInUse)
             {
                 Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine("Thread {0} : Skipping file since pattern [{1}] did not match : {2}  [Overide with -p for alternate pattern]", Thread.CurrentThread.ManagedThreadId, myTrackStatus.m_filePatternInUse, current_File.Name);
+                Console.WriteLine("Thread {0} : Skipping file since pattern [{1}] did not match : {2}  [Override with -p for alternate pattern]", Thread.CurrentThread.ManagedThreadId, myTrackStatus.m_filePatternInUse, current_File.Name);
                 Console.ResetColor();
                 return;
             }
@@ -198,23 +199,8 @@ namespace XELoader
                     Console.WriteLine("Thread {0} : Start processing file : {1}", Thread.CurrentThread.ManagedThreadId, current_File.Name);
                     Console.ResetColor();
 
-                    QueryableXEventData x_event_file;
                     //open the XEL file
-                    try
-                    {
-                        x_event_file = new QueryableXEventData(in_file_to_process);
-                    }
-                    catch (Exception e)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine("Thread {0} : ***  Exception encountered calling QueryableXEventData in ProcessOneFile *** ", Thread.CurrentThread.ManagedThreadId);
-                        Console.WriteLine("Thread {0} : Exception message : {1}  ", Thread.CurrentThread.ManagedThreadId, e.Message);
-                        Console.WriteLine("Thread {0} : Exception code : {1}  ", Thread.CurrentThread.ManagedThreadId, System.Runtime.InteropServices.Marshal.GetHRForException(e));  //Using e.HResult gives CS0122 in new versions of .NET
-                        Console.WriteLine("Thread {0} : Exception stack : {1}  ", Thread.CurrentThread.ManagedThreadId, e.StackTrace);
-                        Console.ResetColor();
-
-                        return;
-                    }
+                    QueryableXEventData x_event_file = new QueryableXEventData(in_file_to_process);
                     // process the metadata from the XEL file and add information to the data tables
                     // need to do this only one time, so need to sync with other file processors
                     myTrackStatus.acquire_metadata_Lock(true);
@@ -272,8 +258,11 @@ namespace XELoader
                 Console.WriteLine("Thread {0} : ***  Exception encountered  *** ", Thread.CurrentThread.ManagedThreadId);
                 Console.WriteLine("Thread {0} : Stop processing file : {1}  ", Thread.CurrentThread.ManagedThreadId, current_File.Name);
                 Console.WriteLine("Thread {0} : Exception message    : {1}  ", Thread.CurrentThread.ManagedThreadId, e.Message);
-                Console.WriteLine("Thread {0} : Exception code       : {1}  ", Thread.CurrentThread.ManagedThreadId, System.Runtime.InteropServices.Marshal.GetHRForException(e));    //just using e.HResult gives CS0122 in new versions of .NET
-                Console.WriteLine("Thread {0} : Exception stack      : {1}  ", Thread.CurrentThread.ManagedThreadId, e.StackTrace);
+                Console.WriteLine("Thread {0} : Exception code       : {1}  ", Thread.CurrentThread.ManagedThreadId, e.HResult);
+                if (myInputParameters.m_Verbose)
+                    Console.WriteLine("Thread {0} : Exception stack      : {1}  ", Thread.CurrentThread.ManagedThreadId, e.StackTrace);
+                else
+                    Console.WriteLine("Thread {0} : Use -V parameter for detailed stack trace", Thread.CurrentThread.ManagedThreadId);
                 Console.ResetColor();
 
                 // increment global error and truncation counts from this file
@@ -310,7 +299,7 @@ namespace XELoader
                 xelFiles[0] = myInputParameters.m_XEL_File_To_Process;
                 String[] xemFiles = new String[1];
                 xemFiles[0] = myInputParameters.m_XEM_File_To_Process;
-                QueryableXEventData x_event_file = new QueryableXEventData(xelFiles, xemFiles);
+                QueryableXEventData x_event_file = new QueryableXEventData(xelFiles,xemFiles);
                 // process the metadata from the XEL file and add information to the data tables
                 // need to do this only one time, so need to sync with other file processors
                 myTrackStatus.acquire_metadata_Lock(true);
@@ -360,76 +349,39 @@ namespace XELoader
             }
 
             // file names are of the format: SessionName_PartitionID_TimeStampInfo.xel
+            String formatError = "File name '" + FileProcessed + "' is not in the expected format: SessionName_PartitionID_TimeStampInfo.xel"
+                + Environment.NewLine + "  Workarounds:"
+                + Environment.NewLine + "    1. Use -f to process a single file:  -f\"C:\\path\\to\\file.xel\""
+                + Environment.NewLine + "    2. Use -p to specify a file pattern with wildcards:"
+                + Environment.NewLine + "         -p\"SessionName*.xel\"       match files starting with SessionName"
+                + Environment.NewLine + "         -p\"*AlwaysOn*.xel\"        match files containing AlwaysOn"
+                + Environment.NewLine + "         -p\"*.xel\"                 match all .xel files (default)"
+                + Environment.NewLine + "         -p\"Session?_*.xel\"        use ? to match a single character";
+
             int position = FileProcessed.LastIndexOf(pattern);
             // we run into issues if the file name does not follow the format we expect
             if (0 > position)
-                throw new System.ArgumentException("File name is not in the expected format: SessionName_PartitionID_TimeStampInfo.xel ", "FileProcessed");
+                throw new System.ArgumentException(formatError, "FileProcessed");
             // we got the first part right
             strLeadingPattern = FileProcessed.Substring(0, position);
             position = strLeadingPattern.LastIndexOf(pattern);
             // we run into issues if the file name does not follow the format we expect
             if (0 > position)
-                throw new System.ArgumentException("File name is not in the expected format: SessionName_PartitionID_TimeStampInfo.xel ", "FileProcessed");
+                throw new System.ArgumentException(formatError, "FileProcessed");
             // we got the second part right
             strLeadingPattern = strLeadingPattern.Substring(0, position);
             // we run into issues if the file name does not follow the format we expect
             if (0 > strLeadingPattern.Length)
-                throw new System.ArgumentException("File name is not in the expected format: SessionName_PartitionID_TimeStampInfo.xel ", "FileProcessed");
+                throw new System.ArgumentException(formatError, "FileProcessed");
 
             return strLeadingPattern;
-        }
-
-        static bool CheckAssembly()
-        {
-            String XELinq = "Microsoft.SqlServer.XEvent.Linq, Version=14.0.0.0, Culture=neutral, PublicKeyToken=89845dcd8080cc91, processor architecture=AMD64";
-            var an2 = new AssemblyName(XELinq);
-            try
-            {
-                var assem = Assembly.Load(an2);
-                Console.WriteLine("Loaded assembly: {0}", assem.Location);
-            }
-            catch (Exception e)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine("Cannot start execution; {0}", e.Message);
-                Console.WriteLine(" ");
-                Console.WriteLine("Locate the file Microsoft.SqlServer.XEvent.Linq.dll with version 14.x.x.x in one of the following locations:");
-                Console.WriteLine("   C:\\Program Files\\Microsoft SQL Server\\140\\Shared\\");
-                Console.WriteLine("   C:\\Program Files\\Microsoft SQL Server\\MSSQL14.INSTID\\MSSQL\\Binn\\");
-                Console.WriteLine("   C:\\Program Files (x86)\\Microsoft SQL Server\\140\\Tools\\Binn\\ManagementStudio\\");
-                Console.WriteLine("Copy this file Microsoft.SqlServer.XEvent.Linq.dll to the folder where XELoader.exe is located and restart this program.");
-                Console.ResetColor();
-                return false;
-            }
-
-            String XECore = "Microsoft.SqlServer.XE.Core, Version=14.0.0.0, Culture=neutral, PublicKeyToken=89845dcd8080cc91, processor architecture=AMD64";
-            var an1 = new AssemblyName(XECore);
-            try
-            {
-                var assem = Assembly.Load(an1);
-                Console.WriteLine("Loaded assembly: {0}:", assem.Location);
-            }
-            catch (Exception e)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine("Cannot start execution; {0}:", e.Message);
-                Console.WriteLine(" ");
-                Console.WriteLine("Locate the file Microsoft.SqlServer.XE.Core with version 14.x.x.x in one of the following locations:");
-                Console.WriteLine("   C:\\Program Files\\Microsoft SQL Server\\140\\Shared\\");
-                Console.WriteLine("   C:\\Program Files\\Microsoft SQL Server\\MSSQL14.INSTID\\MSSQL\\Binn\\");
-                Console.WriteLine("   C:\\Program Files (x86)\\Microsoft SQL Server\\140\\Tools\\Binn\\ManagementStudio\\");
-                Console.WriteLine("Copy this file Microsoft.SqlServer.XEvent.Linq.dll to the folder where XELoader.exe is located and restart this program.");
-                Console.ResetColor();
-                return false;
-            }
-
-            return true;
         }
 
         static void PrintProgramDetails()
         {
             Console.WriteLine("");
             Console.WriteLine("This utility can be used to fast load contents of a set of Extended Events file to a SQL Server Database");
+            Console.WriteLine("   Runtime: .NET 9");
             Console.WriteLine("");
         }
     }
