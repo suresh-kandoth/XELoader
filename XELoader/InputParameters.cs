@@ -5,13 +5,13 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text;
 using System.Data;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
+using System.Security;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.SqlServer.XEvent;
 using Microsoft.SqlServer.XEvent.Linq;
 using System.Xml;
-using System.Security;
 
 namespace XELoader
 {
@@ -53,8 +53,11 @@ namespace XELoader
         public int m_CallStack_FrameLength = 8;                         // populated by -h
         public String m_CallStack_command = "ln";                       // populated by -j
 
-        public String m_ConnectionString_targetDB = "";                 // constructed using server name and target database name to which events are loaded
-        public String m_ConnectionString_masterDB = "";                 // constructed using server name and master database name
+        public bool m_TrustServerCertificate = false;                    // populated by -T
+        public bool m_Encrypt = true;                                    // populated by -E  [default: true for .NET 9]
+        public bool m_Verbose = false;                                   // populated by -V
+
+        public String m_ConnectionString = "";                          // constructed using server name and database name
 
         // this method parses all input parameters and stores the value in the member variables
         public bool ProcessInputParameters(String[] _input_params)
@@ -83,7 +86,7 @@ namespace XELoader
                         }
                     case "D":
                         {
-                            char[] charsToTrim = { '\\', '"' };    // we need to get rid of extra characters at the end of the directory path
+                            char[] charsToTrim = { '\\' , '"' };    // we need to get rid of extra characters at the end of the directory path
                             String s_XE_Directory_To_Process = _input_param.Substring(2);
                             m_XE_Directory_To_Process = s_XE_Directory_To_Process.TrimEnd(charsToTrim);
                             break;
@@ -213,6 +216,21 @@ namespace XELoader
                             m_Destination_SQL_Password = "";
                             break;
                         }
+                    case "T":
+                        {
+                            m_TrustServerCertificate = true;
+                            break;
+                        }
+                    case "E":
+                        {
+                            m_Encrypt = false;
+                            break;
+                        }
+                    case "V":
+                        {
+                            m_Verbose = true;
+                            break;
+                        }
                     default:
                         {
                             break;
@@ -224,7 +242,6 @@ namespace XELoader
             if (1 > m_Count_Parameters) // there is a problem with the parameters passed
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine(" ");
                 Console.WriteLine("*** There is a problem with the parameters supplied ***");
                 Console.WriteLine("    There are two required parameters: file location and SQL Server name");
                 Console.WriteLine("    Double check to make sure there are no escape characters or special characters in the parameters");
@@ -238,21 +255,19 @@ namespace XELoader
                 // prepare connection string for easy use later
                 if ("Integrated" == m_Destination_Security_Mode)
                 {
-                    m_ConnectionString_targetDB = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Trusted_Connection=yes;Timeout=60;";
-                    m_ConnectionString_masterDB = @"Server=" + m_Destination_SQL_Server + @"; database=master; Trusted_Connection=yes;Timeout=60;";
+                    m_ConnectionString = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Integrated Security=SSPI;Timeout=60;" + GetSecurityConnectionStringPart();
                 }
                 if ("Standard" == m_Destination_Security_Mode)
                 {
-                    m_ConnectionString_targetDB = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Timeout=60;";
-                    m_ConnectionString_masterDB = @"Server=" + m_Destination_SQL_Server + @"; database=master; Timeout=60;";
+                    m_ConnectionString = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Timeout=60;" + GetSecurityConnectionStringPart();
                 }
-
+                
                 if (0 == m_NumThreads)
                 {
                     // if the user did not provide the number of threads to use, then create one thread for every processor on the system
-                    // limit it to 8 processors since we do not want to overload the disk systems
+                    // limit it to 16 processors since we do not want to overload the disk systems
 
-                    m_NumThreads = Math.Min(System.Environment.ProcessorCount, 8);
+                    m_NumThreads = Math.Min(System.Environment.ProcessorCount,16);
                 }
 
                 // print time zone information
@@ -285,15 +300,45 @@ namespace XELoader
             return false;
         }   //ProcessInputParameters
 
+        public String GetSecurityConnectionStringPart()
+        {
+            return "TrustServerCertificate=" + m_TrustServerCertificate.ToString() + ";Encrypt=" + m_Encrypt.ToString() + ";";
+        }
+
+        public String GetMasterConnectionString()
+        {
+            if ("Standard" == m_Destination_Security_Mode)
+                return @"Server=" + m_Destination_SQL_Server + @"; database=master; Timeout=60;" + GetSecurityConnectionStringPart();
+            return @"Server=" + m_Destination_SQL_Server + @"; database=master; Integrated Security=SSPI;Timeout=60;" + GetSecurityConnectionStringPart();
+        }
+
         public void DetectServerCapabilities()
         {
             // Establish a connection to the SQL Server that we need to query
-            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString_masterDB);
+            String _ConnectionString = GetMasterConnectionString();
+            SqlConnection DestinationConnection = new SqlConnection(_ConnectionString);
             if ("Standard" == m_Destination_Security_Mode)
             {
                 DestinationConnection.Credential = m_Destination_Sql_Credential;
             }
-            DestinationConnection.Open();
+            try
+            {
+                DestinationConnection.Open();
+            }
+            catch (SqlException ex) when (ex.Message.Contains("certificate chain") || ex.Message.Contains("SSL Provider") || ex.Message.Contains("not trusted"))
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("Thread {0} : ***  SSL Certificate Error  ***", Thread.CurrentThread.ManagedThreadId);
+                Console.WriteLine("Thread {0} : The server's SSL certificate is not trusted by this client.", Thread.CurrentThread.ManagedThreadId);
+                Console.WriteLine("Thread {0} : Error details : {1}", Thread.CurrentThread.ManagedThreadId, ex.Message);
+                Console.WriteLine("");
+                Console.WriteLine("Thread {0} : To resolve this issue you can:", Thread.CurrentThread.ManagedThreadId);
+                Console.WriteLine("Thread {0} :   1. Use -T to trust the server certificate (for self-signed certs)", Thread.CurrentThread.ManagedThreadId);
+                Console.WriteLine("Thread {0} :   2. Use -E to disable encryption", Thread.CurrentThread.ManagedThreadId);
+                Console.WriteLine("Thread {0} :   3. Install the server's certificate in the client's trusted root store", Thread.CurrentThread.ManagedThreadId);
+                Console.ResetColor();
+                throw;
+            }
 
             // check the server version
             String ProductVersion = "";
@@ -312,17 +357,17 @@ namespace XELoader
             }
             int MajorVersion = Convert.ToInt32(ProductVersion.Substring(0, 2));
             // now depending on the major version we can enable or disable certain features to use
-            if ((12 > MajorVersion) && ("" == m_IndexType))
+            if ( (12 > MajorVersion) && ("" == m_IndexType) )
             {
                 // for server versions below 12 [sql 2014] there is no updateable columnstore index support, so we will just use RowStore
                 m_IndexType = "RowStore";
             }
-            if ((12 <= MajorVersion) && ("RowStore" != m_IndexType))
+            if ( (12 <= MajorVersion) && ("RowStore" != m_IndexType ) )
             {
                 // for server versions above 12 [sql 2014] we can use updateable columnstore index support, so we use ColumnStore if RowStore not requested explicitly
                 m_IndexType = "ColumnStore";
             }
-            if ((14 <= MajorVersion) && ("ColumnStore" == m_IndexType) && (false == m_disableLOBonCSI))
+            if ( (14 <= MajorVersion) && ("ColumnStore" == m_IndexType) && (false == m_disableLOBonCSI) )
             {
                 // for server versions above 14 [sql 2017] we can use lob columns in updateable columnstore index support
                 m_LOBallowedonCSI = true;
@@ -333,14 +378,15 @@ namespace XELoader
             {
                 Console.WriteLine("Thread {0} : Using large data types : {1} [Use -l parameter to override]", Thread.CurrentThread.ManagedThreadId, m_LOBallowedonCSI.ToString());
                 if (false == m_LOBallowedonCSI)
-                    Console.WriteLine("Thread {0} : Max data lengths : nvarchar({1}) , varbinary({2}) [Use parameters -X / -L / -B to override]", Thread.CurrentThread.ManagedThreadId, m_StringToStringTruncation, m_BinaryToBinaryTruncation);
+                Console.WriteLine("Thread {0} : Max data lengths : nvarchar({1}) , varbinary({2}) [Use parameters -X / -L / -B to override]", Thread.CurrentThread.ManagedThreadId, m_StringToStringTruncation, m_BinaryToBinaryTruncation);
             }
         }
 
         public void CreateDatabase()
         {
             // Establish a connection to the SQL Server where the database needs to be created
-            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString_masterDB);
+            String _ConnectionString = GetMasterConnectionString();
+            SqlConnection DestinationConnection = new SqlConnection(_ConnectionString);
             if ("Standard" == m_Destination_Security_Mode)
             {
                 DestinationConnection.Credential = m_Destination_Sql_Credential;
@@ -353,7 +399,7 @@ namespace XELoader
             SqlCommand sqlcmd_DatabaseCheck = new SqlCommand(tsql_UseDatabase, DestinationConnection);
             try
             {
-                RowCount = (int)sqlcmd_DatabaseCheck.ExecuteScalar();
+                RowCount = (int) sqlcmd_DatabaseCheck.ExecuteScalar();
             }
             catch (SqlException ex)
             {
@@ -362,9 +408,9 @@ namespace XELoader
                 Console.WriteLine("Thread {0} : Msg : {1} : {2}", Thread.CurrentThread.ManagedThreadId, ex.Number, ex.Message);
                 Console.ResetColor();
             }
-
+            
             // if the database exists check if we can reuse or wipe and then recreate
-            if (1 == RowCount)
+            if ( 1 == RowCount )
             {
                 if (true == m_WipeDatabase)
                 {
@@ -395,7 +441,7 @@ namespace XELoader
             }
 
             // we need to create the requested database if it does not exist already
-            if (0 == RowCount)
+            if ( 0 == RowCount )
             {
                 // Establish the create database command
                 String tsql_CreateDatabase = "CREATE DATABASE [" + m_Destination_SQL_Database + "]";
@@ -426,7 +472,7 @@ namespace XELoader
 
         public void CreateSchema()
         {
-            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString_targetDB);
+            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString);
             if ("Standard" == m_Destination_Security_Mode)
             {
                 DestinationConnection.Credential = m_Destination_Sql_Credential;
@@ -471,7 +517,7 @@ namespace XELoader
         public void CreateTrackingTable()
         {
             // Establish a connection to the SQL Server where the table needs to be created
-            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString_targetDB);
+            SqlConnection DestinationConnection = new SqlConnection(m_ConnectionString);
             if ("Standard" == m_Destination_Security_Mode)
             {
                 DestinationConnection.Credential = m_Destination_Sql_Credential;
@@ -496,7 +542,7 @@ namespace XELoader
             // create the table if it does not already exist
             if (RowCount < 1)
             {
-                String tsql_CreateTable =
+                String tsql_CreateTable = 
                     "CREATE TABLE [dbo].[tbl_ImportedXEventFiles] ([file_id] bigint identity(1,1) primary key clustered, [file_folder] nvarchar(2000) null, [file_name] nvarchar(2000) null, [total_processing_time] time null, [bulk_copy_time] time null)";
                 SqlCommand sql_cmd_create = new SqlCommand(tsql_CreateTable, DestinationConnection);
                 // Execute the create table command
@@ -533,18 +579,17 @@ namespace XELoader
             Console.WriteLine("      if there are multiple files from the same XE session then use the -D parameter");
             Console.WriteLine("-S : specify the server name and instance name to which you want to save the XE data [default : (local) ]");
             Console.WriteLine("      for fast performance use TCP by specifying the server name in the format : -SMachineName,TcpPortNumber");
+            Console.WriteLine("-U : SQL Server login name for SQL Server authentication [default : Windows Integrated]");
+            Console.WriteLine("      when specified, SQL Server authentication is used instead of Windows Integrated authentication");
+            Console.WriteLine("-P : SQL Server login password for SQL Server authentication");
+            Console.WriteLine("      use together with -U for SQL Server authentication");
             Console.WriteLine("");
             Console.WriteLine("*** Optional parameters ***");
-            Console.WriteLine("");
+            Console.WriteLine("");            
             Console.WriteLine("-d : specify the database name to use for saving the processed XE data [default : XE_Import]");
             Console.WriteLine("      if the database name exists, it will be used instead of creating a new one");
             Console.WriteLine("      you can pre-create the database on a specific location, multiple files and other filegroup options for better performance");
-            Console.WriteLine("-U : specify the SQL login name to use for connecting to the SQL Server");
-            Console.WriteLine("      If you do not specify this parameter, Trusted security or Intergrated authentication is used");
-            Console.WriteLine("      If you specify this parameter, supply the password for this login using the -P parameter");
-            Console.WriteLine("-P : specify the password for the SQL login name");
-            Console.WriteLine("      Use this option if you used the -U parameter");
-            Console.WriteLine("-w : use this parameter to indicate if the existing database needs to be (wiped) - dropped and recreated from scratch");
+            Console.WriteLine("-w : use this parameter to indicate if the existing database needs to be dropped and recreated from scratch [do not specify any value for parameter]");
             Console.WriteLine("      you do not specify any value for parameter");
             Console.WriteLine("-c : use this parameter to indicate if all existing tables for this collection of events needs to be cleared and data reloaded");
             Console.WriteLine("      if this option is not passed and the table already exists then new data will be appended to existing tables");
@@ -561,13 +606,16 @@ namespace XELoader
             Console.WriteLine("      RowStore will save all the data in the XE files - so this can use up lot of storage and also slow while querying");
             Console.WriteLine("-b : specify the bulk copy batch size in multiples of 100K [default : 1048576]");
             Console.WriteLine("      when using ColumnStore leave the batch size to the default of 1 million since it is the ideal rowgroup size");
-            Console.WriteLine("-t : specify the number of threads to use for processing [default : # of processors in the system capped at 8]");
+            Console.WriteLine("-t : specify the number of threads to use for processing [default : # of processors in the system capped at 16]");
             Console.WriteLine("      each XEL file will be processed independently on a seperate thread, the more parallelism the faster you can load the files");
-            Console.WriteLine("      If you need more than the default 8 threads to process the XEL files in parallel, then provide a value higher than 8");
-            Console.WriteLine("      If you need to limit the number of threads processing the XEL files, then provide a value like 1 or 2 for this parameter");
             Console.WriteLine("-p : specify the name pattern of files that needs to be processed from a folder of .xel files [default : \"*.xel\"]");
             Console.WriteLine("      if there are XE files from multiple XE sessions use this parameter to selectively process files of interest");
-            Console.WriteLine("      Example to use: -p\"activity_tracing*.xel\" will process all XEL files that start with activity_tracing in that folder");
+            Console.WriteLine("      supports wildcard patterns using * (match any characters) and ? (match single character)");
+            Console.WriteLine("      examples:");
+            Console.WriteLine("        -p\"SessionName*.xel\"       match files starting with SessionName");
+            Console.WriteLine("        -p\"*AlwaysOn*.xel\"        match files containing AlwaysOn");
+            Console.WriteLine("        -p\"*.xel\"                 match all .xel files (default)");
+            Console.WriteLine("        -p\"Session?_*.xel\"        use ? to match a single character");
             Console.WriteLine("-R : specify whether to perform read-ahead (y) or not (n) [default : y]");
             Console.WriteLine("      read ahead can populate the file system cache and potentially improve event processing performance depending on system memory");
             Console.WriteLine("-z : specify what timezone you want to use when processing time information to convert utc time to local time");
@@ -577,7 +625,6 @@ namespace XELoader
             Console.WriteLine("      3.LOCAL time in datetime2 format used for accurate event sequence down to the 100 nanoseconds unit");
             Console.WriteLine("     If you do not pass any value for this parameter, the local timezone of the importing system is used");
             Console.WriteLine("-l : use this parameter to indicate if you want to disable use of LOB with ColumnStore index in newer versions");
-            Console.WriteLine("      SQL Server 2017 and above allow LOB columns on ColumnStore index");
             Console.WriteLine("      you do not specify any value for parameter");
             Console.WriteLine("-L : specify truncation length for large strings when using ColumnStore index [default : 1024]");
             Console.WriteLine("-X : specify truncation length for large XML values when using ColumnStore index [default : 4000]");
@@ -591,6 +638,15 @@ namespace XELoader
             Console.WriteLine("      if you collected the extended events on a 64-bit server then you need 8 bytes for a frame");
             Console.WriteLine("      if you collected the extended events on a 32-bit server then you need 4 bytes for a frame");
             Console.WriteLine("-j : specify what debugger command you want to execute for each frame in callstack action [default : ln]");
+            Console.WriteLine("-T : use this parameter to trust the server's SSL certificate [default : do not trust]");
+            Console.WriteLine("      use this when connecting to a server with a self-signed certificate");
+            Console.WriteLine("      you do not specify any value for parameter");
+            Console.WriteLine("-E : use this parameter to disable encryption for the SQL connection [default : encryption enabled]");
+            Console.WriteLine("      use this when encryption is not required or causing connection issues");
+            Console.WriteLine("      you do not specify any value for parameter");
+            Console.WriteLine("-V : use this parameter to enable verbose output including full exception stack traces [default : off]");
+            Console.WriteLine("      use this when troubleshooting errors to get detailed diagnostic information");
+            Console.WriteLine("      you do not specify any value for parameter");
             Console.WriteLine("");
             Console.WriteLine("*** End of parameters ***");
         }
