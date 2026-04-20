@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Data;
 using Microsoft.Data.SqlClient;
 using System.Security;
@@ -109,6 +110,10 @@ namespace XELoader
                     case "d":
                         {
                             m_Destination_SQL_Database = _input_param.Substring(2);
+                            if (!IsValidSqlIdentifier(m_Destination_SQL_Database))
+                            {
+                                throw new ArgumentException("Invalid database name supplied via -d parameter. Only letters, digits and underscore are allowed, and the name cannot start with a digit. Value: '" + m_Destination_SQL_Database + "'");
+                            }
                             break;
                         }
                     case "b":
@@ -124,6 +129,10 @@ namespace XELoader
                     case "s":
                         {
                             m_SchemaName = _input_param.Substring(2);
+                            if (!IsValidSqlIdentifier(m_SchemaName))
+                            {
+                                throw new ArgumentException("Invalid schema name supplied via -s parameter. Only letters, digits and underscore are allowed, and the name cannot start with a digit. Value: '" + m_SchemaName + "'");
+                            }
                             break;
                         }
                     case "w":
@@ -252,15 +261,8 @@ namespace XELoader
             }
             if (1 <= m_Count_Parameters) // now we have a good set of parameters to process
             {
-                // prepare connection string for easy use later
-                if ("Integrated" == m_Destination_Security_Mode)
-                {
-                    m_ConnectionString = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Integrated Security=SSPI;Timeout=60;" + GetSecurityConnectionStringPart();
-                }
-                if ("Standard" == m_Destination_Security_Mode)
-                {
-                    m_ConnectionString = @"Server=" + m_Destination_SQL_Server + @"; database=" + m_Destination_SQL_Database + @"; Timeout=60;" + GetSecurityConnectionStringPart();
-                }
+                // prepare connection string for easy use later - build safely via SqlConnectionStringBuilder
+                m_ConnectionString = BuildConnectionStringBuilder(m_Destination_SQL_Database).ConnectionString;
                 
                 if (0 == m_NumThreads)
                 {
@@ -300,16 +302,50 @@ namespace XELoader
             return false;
         }   //ProcessInputParameters
 
+        // Validates a SQL identifier supplied via the command line (e.g. database name via -d, schema name via -s).
+        // Only safe ASCII letters, digits and underscore are allowed, and the first character cannot be a digit.
+        // This prevents T-SQL identifier injection (e.g. a name like "abc]; DROP DATABASE master; --").
+        private static bool IsValidSqlIdentifier(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+            // limit length to the SQL Server identifier limit (128) to avoid surprises
+            if (name.Length > 128)
+            {
+                return false;
+            }
+            return Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_]*$");
+        }
+
         public String GetSecurityConnectionStringPart()
         {
             return "TrustServerCertificate=" + m_TrustServerCertificate.ToString() + ";Encrypt=" + m_Encrypt.ToString() + ";";
         }
 
+        // Build a connection string in a safe way using SqlConnectionStringBuilder so that untrusted
+        // values (e.g. a server name containing a semicolon) cannot inject additional keywords.
+        private SqlConnectionStringBuilder BuildConnectionStringBuilder(string databaseName)
+        {
+            SqlConnectionStringBuilder builder = new SqlConnectionStringBuilder
+            {
+                DataSource = m_Destination_SQL_Server,
+                InitialCatalog = databaseName,
+                ConnectTimeout = 60,
+                TrustServerCertificate = m_TrustServerCertificate,
+                Encrypt = m_Encrypt
+            };
+            if ("Integrated" == m_Destination_Security_Mode)
+            {
+                builder.IntegratedSecurity = true;
+            }
+            return builder;
+        }
+
         public String GetMasterConnectionString()
         {
-            if ("Standard" == m_Destination_Security_Mode)
-                return @"Server=" + m_Destination_SQL_Server + @"; database=master; Timeout=60;" + GetSecurityConnectionStringPart();
-            return @"Server=" + m_Destination_SQL_Server + @"; database=master; Integrated Security=SSPI;Timeout=60;" + GetSecurityConnectionStringPart();
+            return BuildConnectionStringBuilder("master").ConnectionString;
         }
 
         public void DetectServerCapabilities()
@@ -395,8 +431,9 @@ namespace XELoader
 
             // check if the database requested exists in this server
             int RowCount = 0;
-            String tsql_UseDatabase = "select count([name]) from sys.databases where [name] = N'" + m_Destination_SQL_Database + "'";
+            String tsql_UseDatabase = "select count([name]) from sys.databases where [name] = @dbname";
             SqlCommand sqlcmd_DatabaseCheck = new SqlCommand(tsql_UseDatabase, DestinationConnection);
+            sqlcmd_DatabaseCheck.Parameters.Add("@dbname", SqlDbType.NVarChar, 128).Value = m_Destination_SQL_Database;
             try
             {
                 RowCount = (int) sqlcmd_DatabaseCheck.ExecuteScalar();
@@ -484,8 +521,9 @@ namespace XELoader
             {
                 // first do a check to see if the schema requested exists
                 int RowCount = 0;
-                String tsql_SchemaCheck = "select count([name]) from sys.schemas where [name] = N'" + m_SchemaName + "'";
+                String tsql_SchemaCheck = "select count([name]) from sys.schemas where [name] = @schemaname";
                 SqlCommand sqlcmd_SchemaCheck = new SqlCommand(tsql_SchemaCheck, DestinationConnection);
+                sqlcmd_SchemaCheck.Parameters.Add("@schemaname", SqlDbType.NVarChar, 128).Value = m_SchemaName;
                 try
                 {
                     RowCount = (int)sqlcmd_SchemaCheck.ExecuteScalar();

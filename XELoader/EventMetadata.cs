@@ -117,8 +117,8 @@ namespace XELoader
                         }
                         //now add this data table to the global collection
                         m_event_tables.Add(dt_event);
-                        //increment table count in the status tracker
-                        XELoader.FileProcessor.myTrackStatus.m_Number_of_Tables++;
+                        //increment table count in the status tracker (atomic - this method is called from concurrent per-file workers, though also guarded by metadata_Lock)
+                        System.Threading.Interlocked.Increment(ref XELoader.FileProcessor.myTrackStatus.m_Number_of_Tables);
                         // create the table in the target SQL database for this event
                         // we will do this only if the mode is not append only
                         if (false == XELoader.FileProcessor.myTrackStatus.IsTableCreated)
@@ -143,8 +143,10 @@ namespace XELoader
 
             // check if this table already exists
             int RowCount = 0;
-            String tsql_ObjectCheck = "select count([name]) from sys.tables where [name] = N'" + in_dt_event.TableName + "' and schema_id = SCHEMA_ID('" + XELoader.FileProcessor.myInputParameters.m_SchemaName + "')";
+            String tsql_ObjectCheck = "select count([name]) from sys.tables where [name] = @tablename and schema_id = SCHEMA_ID(@schemaname)";
             SqlCommand sql_cmd_ObjectCheck = new SqlCommand(tsql_ObjectCheck, DestinationConnection);
+            sql_cmd_ObjectCheck.Parameters.Add("@tablename", SqlDbType.NVarChar, 128).Value = in_dt_event.TableName;
+            sql_cmd_ObjectCheck.Parameters.Add("@schemaname", SqlDbType.NVarChar, 128).Value = XELoader.FileProcessor.myInputParameters.m_SchemaName;
             try
             {
                 RowCount = (int)sql_cmd_ObjectCheck.ExecuteScalar();

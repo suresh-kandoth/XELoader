@@ -95,6 +95,16 @@ namespace XELoader
                     string[] xel_Files_To_Process = Directory.GetFiles(myInputParameters.m_XE_Directory_To_Process, myInputParameters.m_XEL_File_Pattern);
                     Console.WriteLine("Thread {0} : Detected {1} file(s) in the input directory : [ {2} ]", Thread.CurrentThread.ManagedThreadId, xel_Files_To_Process.Length, myInputParameters.m_XE_Directory_To_Process);
 
+                    // if the directory did not match any files, there is nothing to do - bail out with a friendly message
+                    if (xel_Files_To_Process.Length == 0)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.WriteLine("Thread {0} : No files matching pattern [{1}] were found in directory [{2}]. Nothing to process. [Override with -p for an alternate pattern]",
+                            Thread.CurrentThread.ManagedThreadId, myInputParameters.m_XEL_File_Pattern, myInputParameters.m_XE_Directory_To_Process);
+                        Console.ResetColor();
+                        return;
+                    }
+
                     // establish the file pattern we are going to process
                     if (("*.xel" == myInputParameters.m_XEL_File_Pattern) & ("" == myTrackStatus.m_filePatternInUse))
                     {
@@ -179,16 +189,29 @@ namespace XELoader
             Console.ResetColor();
 
             EventHolder x_event_holder = null;
+            Thread x_Thread = null;
             try
             {
-                //increment file count in the tracker
-                myTrackStatus.m_Number_of_Files++;
+                // check if this file actually exists BEFORE we kick off any read-ahead against it,
+                // otherwise the read-ahead thread will silently crash on a missing file
+                if (!File.Exists(in_file_to_process))
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine("Thread {0} : Skipping file since it does not exist : {1}", Thread.CurrentThread.ManagedThreadId, in_file_to_process);
+                    Console.ResetColor();
+                    return;
+                }
+
+                //increment file count in the tracker (atomic - this method runs concurrently under Parallel.ForEach)
+                Interlocked.Increment(ref myTrackStatus.m_Number_of_Files);
 
                 // call read ahead on this file to speed up the XE Linq reader
                 if ("y" == myInputParameters.m_ReadAhead)
                 {
                     ReadAhead x_ReadAhead = new ReadAhead(in_file_to_process);
-                    Thread x_Thread = new Thread(new ThreadStart(x_ReadAhead.DoReadAhead));
+                    x_Thread = new Thread(new ThreadStart(x_ReadAhead.DoReadAhead));
+                    x_Thread.IsBackground = true;                                               // do not keep the process alive if main work finishes
+                    x_Thread.Name = "XELoader-ReadAhead";
                     x_Thread.Start();
                 }
 
@@ -275,12 +298,28 @@ namespace XELoader
                 }
                 myTrackStatus.release_error_truncation_Lock(true);
             }
+            finally
+            {
+                // ensure the read-ahead helper for THIS file has finished before we return so it cannot
+                // contend with I/O for the next file that this worker picks up
+                if (x_Thread != null)
+                {
+                    try
+                    {
+                        x_Thread.Join();
+                    }
+                    catch (Exception)
+                    {
+                        // read-ahead is best-effort - swallow join errors
+                    }
+                }
+            }
         }
 
         static void ProcessXELwithXEM()
         {
-            //increment file count in the tracker
-            myTrackStatus.m_Number_of_Files++;
+            //increment file count in the tracker (atomic, for consistency even though this path runs on a single thread)
+            Interlocked.Increment(ref myTrackStatus.m_Number_of_Files);
 
             EventHolder x_event_holder;
             x_event_holder = new EventHolder(myInputParameters.m_XEL_File_To_Process);

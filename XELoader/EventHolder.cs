@@ -417,8 +417,8 @@ namespace XELoader
                 DateTime BulkCopyEndTime = DateTime.Now;
                 //track the bulk copy timings
                 m_Bulk_Copy_Duration += (BulkCopyEndTime - BulkCopyStartTime);
-                //increment the count of events in the status tracker
-                XELoader.FileProcessor.myTrackStatus.m_Number_of_Events += in_dt_To_SaveToDatabase.Rows.Count;
+                //increment the count of events in the status tracker (atomic - called from concurrent per-file workers)
+                Interlocked.Add(ref XELoader.FileProcessor.myTrackStatus.m_Number_of_Events, in_dt_To_SaveToDatabase.Rows.Count);
 
                 // cleanup all resources
                 DestinationBulkCopy.Close();
