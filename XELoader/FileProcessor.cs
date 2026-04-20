@@ -211,7 +211,7 @@ namespace XELoader
                     ReadAhead x_ReadAhead = new ReadAhead(in_file_to_process);
                     x_Thread = new Thread(new ThreadStart(x_ReadAhead.DoReadAhead));
                     x_Thread.IsBackground = true;                                               // do not keep the process alive if main work finishes
-                    x_Thread.Name = "XELoader-ReadAhead";
+                    x_Thread.Name = "XELoader-ReadAhead-" + current_File.Name;
                     x_Thread.Start();
                 }
 
